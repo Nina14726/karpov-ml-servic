@@ -32,9 +32,9 @@ app = FastAPI()
 logger.info("Загружаем список постов...")
 df_posts_sorted = load_sql(
     """
-    SELECT id, text, topic
+    SELECT post_id AS id, text, topic
     FROM public.post_text_df
-    ORDER BY id
+    ORDER BY post_id
     """,
     dtypes={"id": "int64"},
 )
