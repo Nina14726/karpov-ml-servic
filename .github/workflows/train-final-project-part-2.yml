@@ -1,0 +1,75 @@
+name: Train final project part 2
+
+on:
+  push:
+    branches:
+      - final-project-part-2
+    paths:
+      - "final_project/part_2/**"
+      - ".github/workflows/train-final-project-part-2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  train-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      POSTGRES_HOST: postgres.lab.karpov.courses
+      POSTGRES_PORT: "6432"
+      POSTGRES_DB: startml
+      POSTGRES_USER: robot-startml-ro
+      POSTGRES_PASSWORD: pheiph0hahj1Vaif
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: final-project-part-2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: final_project/part_2/requirements.txt
+
+      - name: Install dependencies
+        working-directory: final_project/part_2
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Train model and save features
+        working-directory: final_project/part_2
+        run: python train_model.py --feed-limit 1000000
+
+      - name: Verify pickle model
+        working-directory: final_project/part_2
+        run: |
+          python - <<'PY'
+          import pickle
+          from pathlib import Path
+
+          path = Path("model.pkl")
+          assert path.exists() and path.stat().st_size > 0
+          with path.open("rb") as file:
+              model = pickle.load(file)
+          assert hasattr(model, "predict")
+          assert hasattr(model, "predict_proba")
+          print(f"Verified {path} ({path.stat().st_size} bytes)")
+          PY
+
+      - name: Commit trained model
+        run: |
+          git config user.name "Nina14726"
+          git config user.email "Nina14726@users.noreply.github.com"
+          git add final_project/part_2/model.pkl
+          if git diff --cached --quiet; then
+            echo "model.pkl has not changed"
+          else
+            git commit -m "Add trained recommendation model"
+            git push
+          fi
