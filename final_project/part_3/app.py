@@ -1,15 +1,32 @@
 import os
 import pickle
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import psycopg2
 from fastapi import FastAPI
 from loguru import logger
+from pydantic import BaseModel
 
-from database import postgres_connection
-from schema import PostGet
+
+class PostGet(BaseModel):
+    id: int
+    text: str
+    topic: Optional[str] = None
+
+
+def postgres_connection():
+    conn = psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "postgres.lab.karpov.courses"),
+        port=int(os.getenv("POSTGRES_PORT", "6432")),
+        database=os.getenv("POSTGRES_DB", "startml"),
+        user=os.getenv("POSTGRES_USER", "robot-startml-ro"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+    )
+    conn.autocommit = True
+    return conn
 
 
 def load_sql(query: str, dtypes: Dict[str, Any] | None = None) -> pd.DataFrame:
@@ -20,7 +37,7 @@ def load_sql(query: str, dtypes: Dict[str, Any] | None = None) -> pd.DataFrame:
         conn.close()
 
 
-def load_model(model_path: str = "model.pkl"):
+def load_bundle(model_path: str = "model_final.pkl"):
     if os.environ.get("IS_LMS", "0") == "1":
         model_path = os.environ["MODEL_PATH"]
 
@@ -28,18 +45,35 @@ def load_model(model_path: str = "model.pkl"):
         return pickle.load(file)
 
 
-CAT_FEATURES = ["gender", "country", "city", "exp_group", "os", "source", "topic"]
+CAT_FEATURES = [
+    "gender", "country", "city",
+    "exp_group", "os", "source", "topic"
+]
 EMB_COLS = [f"emb_{i}" for i in range(15)]
 FEATURES = (
     CAT_FEATURES
-    + ["age", "text_length", "word_count", "unique_word_count", "hour", "dayofweek", "month"]
+    + [
+        "age",
+        "text_length",
+        "word_count",
+        "unique_word_count",
+        "hour",
+        "dayofweek",
+        "month",
+    ]
     + EMB_COLS
 )
 
 logger.info("Инициализация сервиса...")
 
 app = FastAPI()
-model = load_model()
+
+bundle = load_bundle()
+model = bundle["model"]
+post_features = bundle["post_features"].copy()
+
+post_features["topic"] = post_features["topic"].astype(str)
+post_features = post_features.set_index("post_id")
 
 user_features = load_sql(
     """
@@ -47,18 +81,11 @@ user_features = load_sql(
     FROM public.user_data
     """
 )
+
 for column in ["gender", "country", "city", "exp_group", "os", "source"]:
     user_features[column] = user_features[column].astype(str)
-user_features = user_features.set_index("user_id")
 
-post_features = load_sql(
-    """
-    SELECT *
-    FROM nina14726_post_features_dl
-    """
-)
-post_features["topic"] = post_features["topic"].astype(str)
-post_features = post_features.set_index("post_id")
+user_features = user_features.set_index("user_id")
 
 posts_text = load_sql(
     """
@@ -71,13 +98,18 @@ logger.success("Сервис успешно инициализирован")
 
 
 @app.get("/post/recommendations/", response_model=List[PostGet])
-def recommended_posts(user_id: int, dt: datetime, limit: int = 10) -> List[PostGet]:
+def recommended_posts(
+    user_id: int,
+    dt: datetime,
+    limit: int = 10,
+) -> List[PostGet]:
     try:
         user = user_features.loc[user_id]
     except KeyError:
         return []
 
     X = post_features.copy()
+
     X["gender"] = user["gender"]
     X["country"] = user["country"]
     X["city"] = user["city"]
@@ -88,6 +120,7 @@ def recommended_posts(user_id: int, dt: datetime, limit: int = 10) -> List[PostG
     X["hour"] = dt.hour
     X["dayofweek"] = dt.weekday()
     X["month"] = dt.month
+
     X = X[FEATURES]
 
     proba = model.predict_proba(X)[:, 1]
