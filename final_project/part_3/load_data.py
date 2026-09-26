@@ -24,7 +24,7 @@ def load_users(connection) -> pd.DataFrame:
 def load_posts(connection) -> pd.DataFrame:
     return pd.read_sql(
         """
-        SELECT id, text, topic
+        SELECT post_id, text, topic
         FROM public.post_text_df
         """,
         connection,
@@ -35,18 +35,18 @@ def load_feed(connection, limit: int = DEFAULT_FEED_LIMIT) -> pd.DataFrame:
     if not 1 <= limit <= MAX_FEED_LIMIT:
         raise ValueError(f"limit должен быть от 1 до {MAX_FEED_LIMIT}")
 
-    query = f"""
+    return pd.read_sql(
+        f"""
         SELECT timestamp, user_id, post_id, action, target
         FROM public.feed_data
         WHERE action = 'view'
         LIMIT {limit}
-    """
-    return pd.read_sql(query, connection)
+        """,
+        connection,
+    )
 
 
-def load_all_data(
-    feed_limit: int = DEFAULT_FEED_LIMIT,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_all_data(feed_limit: int = DEFAULT_FEED_LIMIT):
     connection = postgres_connection()
     try:
         users = load_users(connection)
@@ -58,53 +58,31 @@ def load_all_data(
     return users, posts, feed
 
 
-def validate_loaded_data(
-    users: pd.DataFrame,
-    posts: pd.DataFrame,
-    feed: pd.DataFrame,
-) -> None:
-    expected_users = {
-        "user_id",
-        "age",
-        "gender",
-        "country",
-        "city",
-        "exp_group",
-        "os",
-        "source",
-    }
-    expected_posts = {"id", "text", "topic"}
-    expected_feed = {"timestamp", "user_id", "post_id", "action", "target"}
-
-    if not expected_users.issubset(users.columns):
+def validate_loaded_data(users, posts, feed) -> None:
+    if not {"user_id", "age", "gender", "country", "city", "exp_group", "os", "source"}.issubset(users.columns):
         raise ValueError("В user_data отсутствуют обязательные столбцы")
-    if not expected_posts.issubset(posts.columns):
+    if not {"post_id", "text", "topic"}.issubset(posts.columns):
         raise ValueError("В post_text_df отсутствуют обязательные столбцы")
-    if not expected_feed.issubset(feed.columns):
+    if not {"timestamp", "user_id", "post_id", "action", "target"}.issubset(feed.columns):
         raise ValueError("В feed_data отсутствуют обязательные столбцы")
     if len(feed) > MAX_FEED_LIMIT:
         raise ValueError("Выгружено больше 10 миллионов взаимодействий")
-    if not feed.empty and not feed["action"].eq("view").all():
-        raise ValueError("В обучающей выборке должны находиться только просмотры")
     if feed["target"].isna().any():
-        raise ValueError("В target обнаружены пропущенные значения")
+        raise ValueError("В target есть пропуски")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Выгрузка данных финального проекта")
-    parser.add_argument(
-        "--feed-limit",
-        type=int,
-        default=DEFAULT_FEED_LIMIT,
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--feed-limit", type=int, default=DEFAULT_FEED_LIMIT)
     args = parser.parse_args()
 
-    users, posts, feed = load_all_data(feed_limit=args.feed_limit)
+    users, posts, feed = load_all_data(args.feed_limit)
     validate_loaded_data(users, posts, feed)
 
     print("user_data:", users.shape)
     print("post_text_df:", posts.shape)
     print("feed_data:", feed.shape)
+    print(feed["target"].value_counts(dropna=False))
 
 
 if __name__ == "__main__":
